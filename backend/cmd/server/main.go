@@ -18,6 +18,9 @@ import (
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
+	"github.com/cbdc-simulator/backend/internal/audit"
+	"github.com/cbdc-simulator/backend/internal/auth"
+	"github.com/cbdc-simulator/backend/internal/middleware"
 	"github.com/cbdc-simulator/backend/pkg/database"
 	rdb "github.com/cbdc-simulator/backend/pkg/redis"
 	"github.com/cbdc-simulator/backend/pkg/response"
@@ -111,17 +114,46 @@ func main() {
 	// Health check — no auth, used by Docker, load balancers, and monitoring
 	r.Get("/health", healthHandler(dbPool, redisClient))
 
+	// ── Auth service wiring ──────────────────────────────────────────────────
+	jwtSecret := mustEnv("JWT_SECRET")
+	signingKey := mustEnv("SIGNING_KEY")
+	_ = signingKey // will be used by payment service in Phase 5
+
+	accessTTL := parseDuration(getEnv("JWT_ACCESS_TTL_SECONDS", "900"), 900)
+	refreshTTL := parseDuration(getEnv("JWT_REFRESH_TTL_SECONDS", "604800"), 604800)
+
+	auditSvc := audit.NewService(dbPool)
+	authRepo := auth.NewRepository(dbPool)
+	authSvc := auth.NewService(authRepo, auditSvc, auth.Config{
+		JWTSecret:       jwtSecret,
+		AccessTokenTTL:  accessTTL,
+		RefreshTokenTTL: refreshTTL,
+	})
+
+	// secureCookies: true in production (HTTPS enforced), false in dev (plain HTTP)
+	secureCookies := getEnv("APP_ENV", "development") == "production"
+	authHandler := auth.NewHandler(authSvc, refreshTTL, secureCookies)
+
 	// API v1
 	r.Route("/api/v1", func(r chi.Router) {
 		// System info — public, no auth
 		r.Get("/system/info", systemInfoHandler())
 
-		// All other routes will be mounted here as phases are implemented:
-		// r.Mount("/auth",     authHandler.Routes())
-		// r.Mount("/wallets",  walletHandler.Routes())
-		// r.Mount("/payments", paymentHandler.Routes())
-		// r.Mount("/merchant", merchantHandler.Routes())
-		// r.Mount("/admin",    adminHandler.Routes())
+		// Auth routes — rate limited, no JWT required
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.AuthRateLimit(redisClient))
+			r.Mount("/auth", authHandler.Routes())
+		})
+
+		// Protected routes — JWT required (added in later phases)
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.Authenticate(authSvc))
+			r.Use(middleware.GeneralRateLimit(redisClient))
+			// r.Mount("/wallets",  walletHandler.Routes())   // Phase 3
+			// r.Mount("/payments", paymentHandler.Routes())  // Phase 5
+			// r.Mount("/merchant", merchantHandler.Routes()) // Phase 7
+			// r.Mount("/admin",    adminHandler.Routes())    // Phase 9
+		})
 	})
 
 	// ── Server startup ───────────────────────────────────────────────────────
@@ -235,6 +267,15 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Permissions-Policy", "camera=self, microphone=(), geolocation=()")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// parseDuration converts an environment variable (seconds as string) to time.Duration.
+func parseDuration(s string, defaultSecs int) time.Duration {
+	n, err := strconv.Atoi(s)
+	if err != nil || n <= 0 {
+		return time.Duration(defaultSecs) * time.Second
+	}
+	return time.Duration(n) * time.Second
 }
 
 // getEnv reads an environment variable, falling back to a default value.
