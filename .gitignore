@@ -1,0 +1,37 @@
+# Secrets — NEVER commit these
+.env
+backend/.env
+frontend/.env
+*.env.local
+*.env.production
+
+# Go build artifacts
+backend/tmp/
+backend/server
+backend/docs/swagger.json
+backend/docs/swagger.yaml
+backend/docs/docs.go
+
+# Frontend build output
+frontend/dist/
+frontend/node_modules/
+
+# Test cache
+backend/coverage.out
+backend/coverage.html
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.log
+
+# Project documentation (internal reference only)
+/docs

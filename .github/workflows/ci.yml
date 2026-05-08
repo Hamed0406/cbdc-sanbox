@@ -1,0 +1,150 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Backend ──────────────────────────────────────────────────────────────────
+  backend:
+    name: Backend — Build, Lint, Test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: cbdc_test
+          POSTGRES_USER: cbdc_app
+          POSTGRES_PASSWORD: testpassword
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 3
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - name: Download dependencies
+        run: cd backend && go mod download
+
+      - name: Verify go.sum is up to date
+        run: cd backend && go mod verify
+
+      - name: Format check
+        # Fail if any file is not properly formatted
+        run: |
+          cd backend
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Unformatted files:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: Go vet
+        run: cd backend && go vet ./...
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v4
+        with:
+          working-directory: backend
+          version: latest
+
+      - name: Security scan (gosec)
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          cd backend && gosec -quiet -exclude-generated ./...
+
+      - name: Vulnerability check (govulncheck)
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          cd backend && govulncheck ./...
+
+      - name: Run migrations
+        env:
+          DATABASE_URL: "postgres://cbdc_app:testpassword@localhost:5432/cbdc_test?sslmode=disable"
+        run: |
+          go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+          migrate -path backend/migrations -database "$DATABASE_URL" up
+
+      - name: Unit tests
+        run: cd backend && go test -v -race -count=1 ./...
+
+      - name: Integration tests
+        env:
+          TEST_DB_URL: "postgres://cbdc_app:testpassword@localhost:5432/cbdc_test?sslmode=disable"
+          TEST_REDIS_URL: "redis://localhost:6379"
+          JWT_SECRET: "testsecret32byteshexhexhexhexhex"
+          SIGNING_KEY: "testsigning32bytehexhexhexhexhex"
+          DB_PASSWORD: "testpassword"
+        run: cd backend && go test -v -race -count=1 -tags=integration ./...
+
+  # ── Frontend ──────────────────────────────────────────────────────────────────
+  frontend:
+    name: Frontend — Type Check, Lint, Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: cd frontend && npm ci
+
+      - name: TypeScript type check
+        run: cd frontend && npm run type-check
+
+      - name: Lint
+        run: cd frontend && npm run lint
+
+      - name: Audit dependencies
+        # Fail on high or critical vulnerabilities
+        run: cd frontend && npm audit --audit-level=high
+
+      - name: Build (verifies no build-time errors)
+        env:
+          VITE_API_BASE_URL: http://localhost:8080
+          VITE_WS_URL: ws://localhost:8080
+          VITE_APP_ENV: test
+          VITE_CURRENCY_SYMBOL: "DD$"
+          VITE_CURRENCY_NAME: DigitalDollar
+          VITE_QR_EXPIRE_SECONDS: "900"
+        run: cd frontend && npm run build
+
+  # ── Docker build ──────────────────────────────────────────────────────────────
+  docker:
+    name: Docker — Build Images
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: docker build -t cbdc-backend:ci ./backend
+
+      - name: Build frontend image
+        run: docker build -t cbdc-frontend:ci ./frontend

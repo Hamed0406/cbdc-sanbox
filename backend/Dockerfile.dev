@@ -1,0 +1,18 @@
+# Development Dockerfile — uses Air for hot-reload.
+# Source code is mounted as a volume so edits reflect without rebuilding.
+FROM golang:1.22-alpine
+
+RUN apk add --no-cache gcc musl-dev git
+
+# Install Air (hot-reload tool for Go)
+RUN go install github.com/cosmtrek/air@latest
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+EXPOSE 8080
+
+# Air watches for .go file changes and rebuilds automatically
+CMD ["air", "-c", ".air.toml"]

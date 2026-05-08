@@ -1,0 +1,16 @@
+# Development Dockerfile — Vite dev server with HMR (Hot Module Replacement).
+# Source code is mounted as a volume; React changes appear instantly in the browser.
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY . .
+
+EXPOSE 5173
+
+# --host 0.0.0.0 is required so the Vite dev server accepts connections
+# from outside the container (the Docker bridge network)
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]

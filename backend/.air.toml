@@ -1,0 +1,19 @@
+# Air configuration for Go hot-reload in development.
+# Air watches .go files and rebuilds + restarts the server automatically.
+
+[build]
+  cmd = "go build -o ./tmp/server ./cmd/server"
+  bin = "./tmp/server"
+  include_ext = ["go"]
+  exclude_dir = ["tmp", "vendor", "docs"]
+  delay = 500  # ms to wait before rebuilding (debounce rapid saves)
+  kill_delay = "2s"
+
+[log]
+  time = true
+
+[color]
+  build   = "yellow"
+  runner  = "green"
+  watcher = "cyan"
+  app     = ""

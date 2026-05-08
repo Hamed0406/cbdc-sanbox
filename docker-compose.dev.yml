@@ -1,0 +1,36 @@
+# Development overrides — use with: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+# Or simply: make dev
+# Changes from base:
+#   - Backend runs with hot-reload via Air
+#   - Source code mounted as volume (edits reflected immediately)
+#   - More verbose logging
+#   - Frontend dev server with HMR instead of Nginx
+
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./backend:/app
+      - go_cache:/root/go/pkg/mod   # cache Go module downloads between restarts
+    environment:
+      LOG_LEVEL: debug
+      APP_ENV: development
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./frontend/src:/app/src      # hot-reload: code changes reflect immediately
+      - ./frontend/public:/app/public
+    ports:
+      - "3000:5173"                  # Vite dev server port
+    environment:
+      VITE_API_BASE_URL: http://localhost:8080
+
+volumes:
+  go_cache:

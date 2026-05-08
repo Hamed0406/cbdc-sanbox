@@ -1,0 +1,32 @@
+# golangci-lint configuration for the CBDC backend.
+# Run: golangci-lint run ./...
+
+linters:
+  enable:
+    - errcheck        # every error must be checked
+    - gosimple        # simplify code
+    - govet           # suspicious constructs
+    - ineffassign     # detect unused assignments
+    - staticcheck     # broad static analysis
+    - unused          # dead code detection
+    - gofmt           # formatting
+    - goimports       # import ordering
+    - gosec           # security issues
+    - bodyclose       # ensure HTTP response bodies are closed
+    - noctx           # HTTP requests should use context
+    - exhaustive      # switch statements must cover all enum values
+    - misspell        # common spelling errors in comments
+
+linters-settings:
+  gosec:
+    excludes:
+      - G104  # Allow unhandled errors in defer (common pattern)
+  errcheck:
+    exclude-functions:
+      - (net/http.ResponseWriter).Write  # Write errors on ResponseWriter are ignorable
+
+issues:
+  exclude-rules:
+    # Test files can use unsafe operations for brevity
+    - path: "_test.go"
+      linters: [gosec, errcheck]
