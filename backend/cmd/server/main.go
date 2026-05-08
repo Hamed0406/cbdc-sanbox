@@ -20,7 +20,9 @@ import (
 
 	"github.com/cbdc-simulator/backend/internal/audit"
 	"github.com/cbdc-simulator/backend/internal/auth"
+	"github.com/cbdc-simulator/backend/internal/ledger"
 	"github.com/cbdc-simulator/backend/internal/middleware"
+	"github.com/cbdc-simulator/backend/internal/wallet"
 	"github.com/cbdc-simulator/backend/pkg/database"
 	rdb "github.com/cbdc-simulator/backend/pkg/redis"
 	"github.com/cbdc-simulator/backend/pkg/response"
@@ -145,11 +147,21 @@ func main() {
 			r.Mount("/auth", authHandler.Routes())
 		})
 
-		// Protected routes — JWT required (added in later phases)
+		// Protected routes — JWT required
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Authenticate(authSvc))
 			r.Use(middleware.GeneralRateLimit(redisClient))
-			// r.Mount("/wallets",  walletHandler.Routes())   // Phase 3
+
+			// Phase 3: Wallet reads
+			ledgerRepo := ledger.NewRepository(dbPool)
+			ledgerSvc := ledger.NewService(ledgerRepo)
+			_ = ledgerSvc // will be used by payment service in Phase 5
+
+			walletRepo := wallet.NewRepository(dbPool)
+			walletSvc := wallet.NewService(walletRepo)
+			walletHandler := wallet.NewHandler(walletSvc)
+			r.Mount("/wallets", walletHandler.Routes())
+
 			// r.Mount("/payments", paymentHandler.Routes())  // Phase 5
 			// r.Mount("/merchant", merchantHandler.Routes()) // Phase 7
 			// r.Mount("/admin",    adminHandler.Routes())    // Phase 9
