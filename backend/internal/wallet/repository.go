@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -153,13 +154,22 @@ func (r *Repository) GetTransactionHistory(ctx context.Context, walletID uuid.UU
 	for rows.Next() {
 		var row TransactionRow
 		var counterpartyWalletStr *string
+		// Scan timestamps into time.Time — the DB returns timestamptz, not strings.
+		// We format to RFC3339 after scanning so the JSON output is consistent.
+		var createdAt time.Time
+		var settledAt *time.Time
 		if err := rows.Scan(
 			&row.ID, &row.Type, &row.Status, &row.Direction,
 			&row.CounterpartyName, &counterpartyWalletStr,
 			&row.AmountCents, &row.Reference,
-			&row.CreatedAt, &row.SettledAt,
+			&createdAt, &settledAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan transaction row: %w", err)
+		}
+		row.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+		if settledAt != nil {
+			s := settledAt.UTC().Format(time.RFC3339)
+			row.SettledAt = &s
 		}
 		if counterpartyWalletStr != nil {
 			row.CounterpartyWallet = counterpartyWalletStr

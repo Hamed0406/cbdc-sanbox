@@ -18,12 +18,15 @@ import (
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
+	"github.com/cbdc-simulator/backend/internal/admin"
 	"github.com/cbdc-simulator/backend/internal/audit"
 	"github.com/cbdc-simulator/backend/internal/auth"
 	"github.com/cbdc-simulator/backend/internal/ledger"
 	"github.com/cbdc-simulator/backend/internal/middleware"
+	"github.com/cbdc-simulator/backend/internal/payment"
 	"github.com/cbdc-simulator/backend/internal/wallet"
 	"github.com/cbdc-simulator/backend/pkg/database"
+	"github.com/cbdc-simulator/backend/pkg/idempotency"
 	rdb "github.com/cbdc-simulator/backend/pkg/redis"
 	"github.com/cbdc-simulator/backend/pkg/response"
 )
@@ -119,7 +122,6 @@ func main() {
 	// ── Auth service wiring ──────────────────────────────────────────────────
 	jwtSecret := mustEnv("JWT_SECRET")
 	signingKey := mustEnv("SIGNING_KEY")
-	_ = signingKey // will be used by payment service in Phase 5
 
 	accessTTL := parseDuration(getEnv("JWT_ACCESS_TTL_SECONDS", "900"), 900)
 	refreshTTL := parseDuration(getEnv("JWT_REFRESH_TTL_SECONDS", "604800"), 604800)
@@ -155,16 +157,28 @@ func main() {
 			// Phase 3: Wallet reads
 			ledgerRepo := ledger.NewRepository(dbPool)
 			ledgerSvc := ledger.NewService(ledgerRepo)
-			_ = ledgerSvc // will be used by payment service in Phase 5
 
 			walletRepo := wallet.NewRepository(dbPool)
 			walletSvc := wallet.NewService(walletRepo)
 			walletHandler := wallet.NewHandler(walletSvc)
 			r.Mount("/wallets", walletHandler.Routes())
 
-			// r.Mount("/payments", paymentHandler.Routes())  // Phase 5
+			// Phase 4: CBDC issuance — admin only
+			idempotentStore := idempotency.New(redisClient)
+			adminSvc := admin.NewService(ledgerSvc, idempotentStore, auditSvc, signingKey)
+			adminHandler := admin.NewHandler(adminSvc)
+			r.Group(func(r chi.Router) {
+				r.Use(middleware.RequireAdmin())
+				r.Mount("/admin", adminHandler.Routes())
+			})
+
+			// Phase 5: P2P Payments
+			paymentRepo := payment.NewRepository(dbPool)
+			paymentSvc := payment.NewService(paymentRepo, ledgerSvc, idempotentStore, auditSvc, signingKey)
+			paymentHandler := payment.NewHandler(paymentSvc)
+			r.Mount("/payments", paymentHandler.Routes())
+
 			// r.Mount("/merchant", merchantHandler.Routes()) // Phase 7
-			// r.Mount("/admin",    adminHandler.Routes())    // Phase 9
 		})
 	})
 

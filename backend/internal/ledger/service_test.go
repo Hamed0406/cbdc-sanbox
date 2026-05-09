@@ -83,6 +83,10 @@ func (m *mockRepo) GetTransactionByIdempotencyKey(_ context.Context, _ uuid.UUID
 	return nil, pgx.ErrNoRows // no existing transaction by default
 }
 
+func (m *mockRepo) InsertIssuanceRecord(_ context.Context, _ pgx.Tx, _, _, _ uuid.UUID, _ int64, _, _ string) (uuid.UUID, error) {
+	return uuid.New(), nil
+}
+
 // fakeTx satisfies pgx.Tx with no-op implementations.
 // Commit is what matters for the Transfer success path — everything else is unused.
 type fakeTx struct{}

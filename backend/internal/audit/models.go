@@ -27,6 +27,7 @@ const (
 	ActionMerchantPayRequest = "merchant.payment_request.create"
 	ActionMerchantPayPaid    = "merchant.payment_request.paid"
 	ActionCBDCIssue          = "cbdc.issue"
+	ActionAdminIssueCBDC     = "cbdc.issue" // alias kept for admin package clarity
 	ActionAdminUserView      = "admin.user.view"
 )
 

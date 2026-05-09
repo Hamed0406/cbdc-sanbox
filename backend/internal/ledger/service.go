@@ -11,6 +11,7 @@ import (
 )
 
 // ledgerRepository defines all DB operations the Service needs.
+// InsertIssuanceRecord is included here so Issue() is fully atomic.
 // Using an interface (not *Repository) lets unit tests inject a mock without a real DB.
 type ledgerRepository interface {
 	BeginTx(ctx context.Context) (pgx.Tx, error)
@@ -20,6 +21,7 @@ type ledgerRepository interface {
 	UpdateWalletBalance(ctx context.Context, tx pgx.Tx, walletID uuid.UUID, delta int64) (int64, error)
 	SettleTransaction(ctx context.Context, tx pgx.Tx, txnID uuid.UUID) error
 	GetTransactionByIdempotencyKey(ctx context.Context, senderWalletID uuid.UUID, key string) (*Transaction, error)
+	InsertIssuanceRecord(ctx context.Context, tx pgx.Tx, adminID, walletID, txnID uuid.UUID, amountCents int64, reason, ipAddress string) (uuid.UUID, error)
 }
 
 // Service is the double-entry bookkeeping engine.
@@ -180,10 +182,83 @@ func (s *Service) Transfer(ctx context.Context, p TransferParams) (*TransferResu
 	}, nil
 }
 
+// Issue mints new DD$ into a wallet with no sender (central bank issuance).
+// The entire operation — transaction record, ledger entry, and cbdc_issuance row —
+// commits or rolls back atomically. No partial issuances are possible.
+func (s *Service) Issue(ctx context.Context, p IssueParams) (*IssueResult, error) {
+	if p.AmountCents <= 0 {
+		return nil, ErrAmountZero
+	}
+
+	// Begin DB transaction
+	tx, err := s.repo.BeginTx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin issuance tx: %w", err)
+	}
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			slog.Error("issuance tx rollback failed", "error", rbErr)
+		}
+	}()
+
+	// Lock the receiver wallet
+	receiverWallet, err := s.repo.GetWalletForUpdate(ctx, tx, p.WalletID)
+	if err != nil {
+		return nil, err
+	}
+	if receiverWallet.IsFrozen {
+		return nil, ErrWalletFrozen
+	}
+
+	// Create ISSUANCE transaction — SenderWalletID is nil (central bank has no wallet)
+	txn, err := s.repo.CreateTransaction(ctx, tx, CreateTransactionParams{
+		Type:             TypeIssuance,
+		ReceiverWalletID: &p.WalletID,
+		AmountCents:      p.AmountCents,
+		Signature:        p.Signature,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Credit the wallet
+	newBalance, err := s.repo.UpdateWalletBalance(ctx, tx, p.WalletID, p.AmountCents)
+	if err != nil {
+		return nil, fmt.Errorf("credit wallet: %w", err)
+	}
+	if _, err := s.repo.CreateLedgerEntry(ctx, tx, p.WalletID, txn.ID, EntryCredit, p.AmountCents, newBalance); err != nil {
+		return nil, fmt.Errorf("issuance ledger entry: %w", err)
+	}
+
+	// Settle the transaction
+	if err := s.repo.SettleTransaction(ctx, tx, txn.ID); err != nil {
+		return nil, err
+	}
+
+	// Record in cbdc_issuance within the same DB transaction for full atomicity
+	issuanceID, err := s.repo.InsertIssuanceRecord(ctx, tx, p.AdminID, p.WalletID, txn.ID, p.AmountCents, p.Reason, p.IPAddress)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit issuance: %w", err)
+	}
+
+	txn.Status = StatusSettled
+
+	return &IssueResult{
+		IssuanceID:  issuanceID,
+		Transaction: txn,
+		NewBalance:  newBalance,
+	}, nil
+}
+
 // Ledger is the interface exposed to other packages (wallet, payment, admin).
 // Using an interface here lets callers be tested without a real DB.
 type Ledger interface {
 	Transfer(ctx context.Context, p TransferParams) (*TransferResult, error)
+	Issue(ctx context.Context, p IssueParams) (*IssueResult, error)
 }
 
 // orderedLockIDs returns two UUIDs in consistent lexicographic order.

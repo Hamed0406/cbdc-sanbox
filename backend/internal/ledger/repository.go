@@ -137,6 +137,27 @@ func (r *Repository) SettleTransaction(ctx context.Context, tx pgx.Tx, txnID uui
 	return nil
 }
 
+// InsertIssuanceRecord writes a row to cbdc_issuance inside an existing DB transaction.
+// Called by Service.Issue after the ledger entries are created, so both records
+// commit or roll back together — no orphaned issuances without ledger entries.
+func (r *Repository) InsertIssuanceRecord(ctx context.Context, tx pgx.Tx, adminID, walletID, txnID uuid.UUID, amountCents int64, reason, ipAddress string) (uuid.UUID, error) {
+	var id uuid.UUID
+	// ip_address is inet — cast from text explicitly (same fix as sessions/audit_logs)
+	var ipParam any
+	if ipAddress != "" {
+		ipParam = ipAddress
+	}
+	err := tx.QueryRow(ctx, `
+		INSERT INTO cbdc_issuance (admin_id, wallet_id, transaction_id, amount_cents, reason, ip_address)
+		VALUES ($1, $2, $3, $4, $5, $6::inet)
+		RETURNING id
+	`, adminID, walletID, txnID, amountCents, reason, ipParam).Scan(&id)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("insert issuance record: %w", err)
+	}
+	return id, nil
+}
+
 // GetTransactionByIdempotencyKey checks whether a transaction with this key
 // already exists for the given sender wallet.
 // Returns the existing transaction if found, or pgx.ErrNoRows if not.

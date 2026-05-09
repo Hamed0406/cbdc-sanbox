@@ -36,6 +36,11 @@ type CachedResponse struct {
 	Body       json.RawMessage `json:"body"`
 }
 
+// UnmarshalBody deserializes the cached response body into the target value.
+func (c *CachedResponse) UnmarshalBody(v any) error {
+	return json.Unmarshal(c.Body, v)
+}
+
 // Store manages idempotency key lookups and storage.
 type Store struct {
 	redis *rdb.Client

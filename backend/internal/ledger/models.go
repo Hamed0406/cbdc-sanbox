@@ -121,6 +121,24 @@ type TransferResult struct {
 	ReceiverBalance int64 // wallet balance after the credit
 }
 
+// IssueParams holds all inputs for a CBDC issuance (central bank credit, no sender).
+type IssueParams struct {
+	AdminID        uuid.UUID
+	WalletID       uuid.UUID
+	AmountCents    int64
+	Reason         string
+	IdempotencyKey string // required — prevents accidental double-mint
+	Signature      string // HMAC of the issuance payload
+	IPAddress      string // admin's IP for audit
+}
+
+// IssueResult is returned after a successful issuance.
+type IssueResult struct {
+	IssuanceID  uuid.UUID
+	Transaction *Transaction
+	NewBalance  int64 // wallet balance after the credit
+}
+
 // CreateTransactionParams groups the fields for a new transaction row.
 type CreateTransactionParams struct {
 	IdempotencyKey      *string
