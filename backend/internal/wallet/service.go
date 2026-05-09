@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,6 +16,7 @@ type repository interface {
 	FindByID(ctx context.Context, walletID uuid.UUID) (*Wallet, error)
 	FindByUserID(ctx context.Context, userID uuid.UUID) (*Wallet, error)
 	GetTransactionHistory(ctx context.Context, walletID uuid.UUID, p ListParams) ([]TransactionRow, int, error)
+	Search(ctx context.Context, query string, limit int) ([]WalletSearchResult, error)
 }
 
 // Service contains wallet business logic.
@@ -101,6 +103,18 @@ func (s *Service) GetTransactions(ctx context.Context, walletID, requesterUserID
 			Pages: pages,
 		},
 	}, nil
+}
+
+// SearchWallets returns wallets matching a name or email query.
+// Balances are included since this endpoint is authenticated — only logged-in
+// users can call it, and seeing a balance next to a name helps confirm the right recipient.
+// Admin wallets are excluded: admins don't have balances and shouldn't be payment targets.
+func (s *Service) SearchWallets(ctx context.Context, query string) ([]WalletSearchResult, error) {
+	query = strings.TrimSpace(query)
+	if len(query) < 2 {
+		return []WalletSearchResult{}, nil
+	}
+	return s.repo.Search(ctx, query, 20)
 }
 
 // authorize checks that the requester is allowed to access a wallet.

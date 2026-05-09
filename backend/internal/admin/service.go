@@ -3,11 +3,13 @@ package admin
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cbdc-simulator/backend/internal/audit"
 	"github.com/cbdc-simulator/backend/internal/ledger"
+	ws "github.com/cbdc-simulator/backend/internal/websocket"
 	"github.com/cbdc-simulator/backend/pkg/currency"
 	"github.com/cbdc-simulator/backend/pkg/crypto"
 	"github.com/cbdc-simulator/backend/pkg/idempotency"
@@ -24,15 +26,17 @@ type Service struct {
 	ledger     ledgerIssuer
 	idempotent *idempotency.Store
 	audit      *audit.Service
-	signingKey string // HMAC key for signing issuance payloads
+	publisher  ws.Publisher // nil-safe; nil in unit tests
+	signingKey string       // HMAC key for signing issuance payloads
 }
 
 // NewService creates a new admin Service.
-func NewService(l ledgerIssuer, idempotent *idempotency.Store, auditSvc *audit.Service, signingKey string) *Service {
+func NewService(l ledgerIssuer, idempotent *idempotency.Store, auditSvc *audit.Service, pub ws.Publisher, signingKey string) *Service {
 	return &Service{
 		ledger:     l,
 		idempotent: idempotent,
 		audit:      auditSvc,
+		publisher:  pub,
 		signingKey: signingKey,
 	}
 }
@@ -136,6 +140,24 @@ func (s *Service) IssueCBDC(ctx context.Context, req IssueRequest, adminID uuid.
 		},
 		Success: true,
 	})
+
+	// WebSocket live event — notify the wallet owner that CBDC was issued.
+	// Fire-and-forget; a failed notification never rolls back a confirmed issuance.
+	if s.publisher != nil {
+		_ = s.publisher.Publish(ctx, walletID, ws.Event{
+			Type:      ws.TypeIssuanceReceived,
+			WalletID:  walletID.String(),
+			Timestamp: time.Now(),
+			Payload: ws.IssuanceEventPayload{
+				TransactionID:     txnID.String(),
+				AmountCents:       req.AmountCents,
+				AmountDisplay:     currency.Format(req.AmountCents, "DD$"),
+				Reason:            req.Reason,
+				NewBalanceCents:   result.NewBalance,
+				NewBalanceDisplay: currency.Format(result.NewBalance, "DD$"),
+			},
+		})
+	}
 
 	return resp, nil
 }

@@ -30,23 +30,22 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     ./cmd/server
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
-# `scratch` is an empty image with no OS, shell, or tools.
-# This minimises the attack surface: there's nothing to exploit even if the
-# binary has a vulnerability that allows arbitrary code execution.
-FROM scratch
+# alpine (not scratch) so that wget is available for Docker health checks.
+# scratch has zero tools, which makes CMD health checks impossible.
+# alpine adds ~5MB but keeps the image minimal and still has no Go toolchain.
+FROM alpine:3.19
 
-# CA certificates are needed for HTTPS calls to external services.
-# Even though this simulator doesn't call external APIs, good practice to include.
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+# wget is needed by the Docker HEALTHCHECK and docker-compose healthcheck.
+# ca-certificates enables HTTPS in the Go binary at runtime.
+RUN apk add --no-cache wget ca-certificates
 
-# Copy only the compiled binary and migration files
+# Copy only the compiled binary
 COPY --from=builder /app/server /server
 COPY --from=builder /app/migrations /migrations
 
 EXPOSE 8080
 
-# Run as non-root user (UID 1000) for least-privilege principle.
-# Even though `scratch` has no /etc/passwd, numeric UIDs still work.
+# Run as non-root user for least-privilege principle.
 USER 1000:1000
 
 ENTRYPOINT ["/server"]

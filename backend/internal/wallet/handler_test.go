@@ -35,6 +35,10 @@ func (m *mockWalletService) GetTransactions(_ context.Context, _, _ uuid.UUID, _
 	return m.txnResp, m.err
 }
 
+func (m *mockWalletService) SearchWallets(_ context.Context, _ string) ([]wallet.WalletSearchResult, error) {
+	return nil, m.err
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // routedRequest builds an HTTP request with chi URL params and auth context values.

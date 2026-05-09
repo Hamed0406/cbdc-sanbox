@@ -48,7 +48,7 @@ func (m *mockLedger) Transfer(_ context.Context, _ ledger.TransferParams) (*ledg
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 func newSvc(repo *mockRepo, l *mockLedger) *payment.Service {
-	return payment.NewService(repo, l, nil, nil, "test-key")
+	return payment.NewService(repo, l, nil, nil, nil, "test-key")
 }
 
 func validSendReq(toWalletID string) payment.SendRequest {

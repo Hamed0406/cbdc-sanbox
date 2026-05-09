@@ -5,10 +5,12 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -71,6 +73,12 @@ func (p *Pool) HealthCheck(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	return p.Ping(ctx)
+}
+
+// IsUniqueViolation returns true when err is a PostgreSQL unique constraint violation (code 23505).
+func IsUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 // Stats returns pool statistics for the health endpoint and monitoring.

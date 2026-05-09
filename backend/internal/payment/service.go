@@ -11,6 +11,7 @@ import (
 
 	"github.com/cbdc-simulator/backend/internal/audit"
 	"github.com/cbdc-simulator/backend/internal/ledger"
+	ws "github.com/cbdc-simulator/backend/internal/websocket"
 	"github.com/cbdc-simulator/backend/pkg/crypto"
 	"github.com/cbdc-simulator/backend/pkg/currency"
 	"github.com/cbdc-simulator/backend/pkg/idempotency"
@@ -33,16 +34,18 @@ type Service struct {
 	ledger     ledgerTransferer
 	idempotent *idempotency.Store
 	audit      *audit.Service
+	publisher  ws.Publisher // nil-safe; nil in unit tests that don't need WebSocket events
 	signingKey string
 }
 
 // NewService creates a new payment Service.
-func NewService(repo repository, l ledgerTransferer, idempotent *idempotency.Store, auditSvc *audit.Service, signingKey string) *Service {
+func NewService(repo repository, l ledgerTransferer, idempotent *idempotency.Store, auditSvc *audit.Service, pub ws.Publisher, signingKey string) *Service {
 	return &Service{
 		repo:       repo,
 		ledger:     l,
 		idempotent: idempotent,
 		audit:      auditSvc,
+		publisher:  pub,
 		signingKey: signingKey,
 	}
 }
@@ -143,6 +146,46 @@ func (s *Service) Send(ctx context.Context, req SendRequest, senderWalletID, use
 				"reference":          req.Reference,
 			},
 			Success: true,
+		})
+	}
+
+	// WebSocket live events — push DEBIT to sender, CREDIT to receiver.
+	// Fire-and-forget: never fail a confirmed payment because a notification failed.
+	// s.publisher is nil in unit tests and when no clients are connected.
+	if s.publisher != nil && !errors.Is(transferErr, ledger.ErrIdempotentReplay) {
+		ref := txnDetail.Reference
+		cp := txnDetail.CounterpartyName
+		now := time.Now()
+
+		_ = s.publisher.Publish(ctx, senderWalletID, ws.Event{
+			Type:      ws.TypePaymentSent,
+			WalletID:  senderWalletID.String(),
+			Timestamp: now,
+			Payload: ws.PaymentEventPayload{
+				TransactionID:     txnID.String(),
+				Direction:         "DEBIT",
+				AmountCents:       req.AmountCents,
+				AmountDisplay:     currency.Format(req.AmountCents, "DD$"),
+				CounterpartyName:  cp,
+				Reference:         ref,
+				NewBalanceCents:   result.SenderBalance,
+				NewBalanceDisplay: currency.Format(result.SenderBalance, "DD$"),
+			},
+		})
+		_ = s.publisher.Publish(ctx, toWalletID, ws.Event{
+			Type:      ws.TypePaymentReceived,
+			WalletID:  toWalletID.String(),
+			Timestamp: now,
+			Payload: ws.PaymentEventPayload{
+				TransactionID:     txnID.String(),
+				Direction:         "CREDIT",
+				AmountCents:       req.AmountCents,
+				AmountDisplay:     currency.Format(req.AmountCents, "DD$"),
+				CounterpartyName:  cp,
+				Reference:         ref,
+				NewBalanceCents:   result.ReceiverBalance,
+				NewBalanceDisplay: currency.Format(result.ReceiverBalance, "DD$"),
+			},
 		})
 	}
 

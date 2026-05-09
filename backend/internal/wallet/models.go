@@ -91,3 +91,13 @@ type ListParams struct {
 	From   *time.Time
 	To     *time.Time
 }
+
+// WalletSearchResult is a wallet with its owner's display info, used by the wallet picker UI.
+type WalletSearchResult struct {
+	WalletID    string `json:"wallet_id"`
+	OwnerName   string `json:"owner_name"`
+	OwnerEmail  string `json:"owner_email"`
+	BalanceCents int64  `json:"balance_cents"`   // omitted for privacy when caller != owner and != admin
+	BalanceDisplay string `json:"balance_display"` // same
+	IsFrozen    bool   `json:"is_frozen"`
+}

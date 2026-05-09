@@ -38,6 +38,7 @@ type TransactionType string
 const (
 	TypeTransfer  TransactionType = "TRANSFER"
 	TypeIssuance  TransactionType = "ISSUANCE"
+	TypePayment   TransactionType = "PAYMENT" // wallet-to-merchant via QR payment request
 	TypeRefund    TransactionType = "REFUND"
 	TypeFee       TransactionType = "FEE"
 )

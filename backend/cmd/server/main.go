@@ -17,14 +17,17 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/google/uuid"
 
 	"github.com/cbdc-simulator/backend/internal/admin"
 	"github.com/cbdc-simulator/backend/internal/audit"
 	"github.com/cbdc-simulator/backend/internal/auth"
 	"github.com/cbdc-simulator/backend/internal/ledger"
+	"github.com/cbdc-simulator/backend/internal/merchant"
 	"github.com/cbdc-simulator/backend/internal/middleware"
 	"github.com/cbdc-simulator/backend/internal/payment"
 	"github.com/cbdc-simulator/backend/internal/wallet"
+	cbdcws "github.com/cbdc-simulator/backend/internal/websocket"
 	"github.com/cbdc-simulator/backend/pkg/database"
 	"github.com/cbdc-simulator/backend/pkg/idempotency"
 	rdb "github.com/cbdc-simulator/backend/pkg/redis"
@@ -138,6 +141,14 @@ func main() {
 	secureCookies := getEnv("APP_ENV", "development") == "production"
 	authHandler := auth.NewHandler(authSvc, refreshTTL, secureCookies)
 
+	// ── WebSocket hub ────────────────────────────────────────────────────────
+	// The hub must be started before any service that publishes events.
+	// It runs for the lifetime of the process; cancelled via hubCancel on shutdown.
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	defer hubCancel()
+	wsHub := cbdcws.NewHub(redisClient)
+	go wsHub.Run(hubCtx)
+
 	// API v1
 	r.Route("/api/v1", func(r chi.Router) {
 		// System info — public, no auth
@@ -165,7 +176,7 @@ func main() {
 
 			// Phase 4: CBDC issuance — admin only
 			idempotentStore := idempotency.New(redisClient)
-			adminSvc := admin.NewService(ledgerSvc, idempotentStore, auditSvc, signingKey)
+			adminSvc := admin.NewService(ledgerSvc, idempotentStore, auditSvc, wsHub, signingKey)
 			adminHandler := admin.NewHandler(adminSvc)
 			r.Group(func(r chi.Router) {
 				r.Use(middleware.RequireAdmin())
@@ -174,11 +185,34 @@ func main() {
 
 			// Phase 5: P2P Payments
 			paymentRepo := payment.NewRepository(dbPool)
-			paymentSvc := payment.NewService(paymentRepo, ledgerSvc, idempotentStore, auditSvc, signingKey)
+			paymentSvc := payment.NewService(paymentRepo, ledgerSvc, idempotentStore, auditSvc, wsHub, signingKey)
 			paymentHandler := payment.NewHandler(paymentSvc)
 			r.Mount("/payments", paymentHandler.Routes())
 
-			// r.Mount("/merchant", merchantHandler.Routes()) // Phase 7
+			// Phase 6: WebSocket live notifications
+			wsHandler := cbdcws.NewHandler(wsHub, authSvc)
+			r.Get("/ws", wsHandler.ServeWS)
+
+			// Phase 7: Merchant & QR Payments
+			merchantRepo := merchant.NewRepository(dbPool)
+			// walletIDLookup bridges wallet.Repository into merchant.WalletIDLookup
+			walletIDLookup := merchant.WalletIDLookup(func(ctx context.Context, userID uuid.UUID) (uuid.UUID, error) {
+				w, err := walletRepo.FindByUserID(ctx, userID)
+				if err != nil {
+					return uuid.Nil, err
+				}
+				return w.ID, nil
+			})
+			merchantSvc := merchant.NewService(merchantRepo, walletIDLookup, ledgerSvc, idempotentStore, wsHub, signingKey)
+			merchantHandler := merchant.NewHandler(merchantSvc)
+
+			// Merchant-management routes: require merchant or admin role
+			r.Group(func(r chi.Router) {
+				r.Use(middleware.RequireMerchant())
+				r.Mount("/merchant", merchantHandler.MerchantRoutes())
+			})
+			// QR pay: any authenticated user (customer paying a merchant QR code)
+			r.Post("/payments/qr", merchantHandler.QRPayRoute())
 		})
 	})
 

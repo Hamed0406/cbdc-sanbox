@@ -67,6 +67,48 @@ func (r *Repository) FindByUserID(ctx context.Context, userID uuid.UUID) (*Walle
 	return w, nil
 }
 
+// Search returns wallets whose owner name or email matches the query string.
+// Results are limited to active, non-deleted users.
+// Balance is always returned — callers are responsible for redacting it if needed.
+func (r *Repository) Search(ctx context.Context, query string, limit int) ([]WalletSearchResult, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	// ILIKE with % prefix+suffix: matches anywhere in the string.
+	// The query is parameterised — SQL injection is impossible at the driver level.
+	pattern := "%" + strings.ReplaceAll(strings.TrimSpace(query), "%", "") + "%"
+
+	rows, err := r.db.Query(ctx, `
+		SELECT w.id, u.full_name, u.email, w.balance, w.is_frozen
+		FROM wallets w
+		JOIN users u ON u.id = w.user_id
+		WHERE u.deleted_at IS NULL
+		  AND u.is_active = TRUE
+		  AND w.deleted_at IS NULL
+		  AND u.role != 'admin'
+		  AND (u.full_name ILIKE $1 OR u.email ILIKE $1)
+		ORDER BY u.full_name ASC
+		LIMIT $2
+	`, pattern, limit)
+	if err != nil {
+		return nil, fmt.Errorf("search wallets: %w", err)
+	}
+	defer rows.Close()
+
+	var results []WalletSearchResult
+	for rows.Next() {
+		var res WalletSearchResult
+		var balanceCents int64
+		if err := rows.Scan(&res.WalletID, &res.OwnerName, &res.OwnerEmail, &balanceCents, &res.IsFrozen); err != nil {
+			return nil, fmt.Errorf("scan wallet search: %w", err)
+		}
+		res.BalanceCents = balanceCents
+		res.BalanceDisplay = fmt.Sprintf("DD$ %d.%02d", balanceCents/100, balanceCents%100)
+		results = append(results, res)
+	}
+	return results, rows.Err()
+}
+
 // GetTransactionHistory returns paginated transaction history for a wallet.
 // Each row includes the direction (DEBIT/CREDIT) and counterparty display name.
 //

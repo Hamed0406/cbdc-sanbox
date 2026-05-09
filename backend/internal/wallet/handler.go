@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -20,6 +21,7 @@ type walletService interface {
 	GetWallet(ctx context.Context, walletID, requesterUserID uuid.UUID, requesterRole string) (*WalletResponse, error)
 	GetBalance(ctx context.Context, walletID, requesterUserID uuid.UUID, requesterRole string) (*BalanceResponse, error)
 	GetTransactions(ctx context.Context, walletID, requesterUserID uuid.UUID, requesterRole string, p ListParams) (*TransactionListResponse, error)
+	SearchWallets(ctx context.Context, query string) ([]WalletSearchResult, error)
 }
 
 // Handler wires wallet HTTP routes.
@@ -36,6 +38,7 @@ func NewHandler(svc walletService) *Handler {
 // Expected to be mounted at /api/v1/wallets.
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
+	r.Get("/search", h.search) // must be before /{id} to avoid matching "search" as an ID
 	r.Get("/{id}", h.getWallet)
 	r.Get("/{id}/balance", h.getBalance)
 	r.Get("/{id}/transactions", h.getTransactions)
@@ -198,4 +201,25 @@ func (h *Handler) handleError(w http.ResponseWriter, err error, requestID string
 	default:
 		response.InternalError(w, requestID)
 	}
+}
+
+// search handles GET /api/v1/wallets/search?q=alice
+// Returns up to 20 wallets matching the name or email query.
+// Used by the frontend wallet picker to let users choose a recipient.
+func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
+	requestID := middleware.GetRequestID(r.Context())
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		response.OK(w, map[string]any{"wallets": []WalletSearchResult{}})
+		return
+	}
+	results, err := h.svc.SearchWallets(r.Context(), q)
+	if err != nil {
+		response.InternalError(w, requestID)
+		return
+	}
+	if results == nil {
+		results = []WalletSearchResult{}
+	}
+	response.OK(w, map[string]any{"wallets": results})
 }

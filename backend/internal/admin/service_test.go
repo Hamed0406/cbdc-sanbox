@@ -29,7 +29,7 @@ func newService(l *mockLedger) *admin.Service {
 	// nil idempotency store and audit service — safe because unit tests
 	// don't reach the Redis/DB calls when validation fails early.
 	auditSvc := audit.NewServiceWithLogger(nil) // test-safe: nil db, no-op audit
-	return admin.NewService(l, nil, auditSvc, "test-signing-key")
+	return admin.NewService(l, nil, auditSvc, nil, "test-signing-key")
 }
 
 func successResult() *ledger.IssueResult {

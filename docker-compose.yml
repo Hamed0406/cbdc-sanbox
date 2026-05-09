@@ -3,8 +3,6 @@
 # Start everything: make setup
 # Stop everything:  make down
 
-version: "3.9"
-
 services:
 
   # ── PostgreSQL — Primary financial data store ──────────────────────────────
@@ -96,7 +94,7 @@ services:
     ports:
       - "8081:8080"   # mapped to 8081 — 8080 was already in use on this host
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -104,24 +102,25 @@ services:
     networks:
       - cbdc_net
 
-  # ── Frontend — React app served by Nginx ──────────────────────────────────
-  # NOTE: Frontend is built in Phase 4. Uncomment this block once
-  # frontend/package.json and the React source exist.
-  # frontend:
-  #   build:
-  #     context: ./frontend
-  #     dockerfile: Dockerfile
-  #   container_name: cbdc_frontend
-  #   restart: unless-stopped
-  #   depends_on:
-  #     backend:
-  #       condition: service_healthy
-  #   env_file:
-  #     - ./frontend/.env
-  #   ports:
-  #     - "3000:80"
-  #   networks:
-  #     - cbdc_net
+  # ── Frontend — React app served by Nginx ─────────────────────────────────
+  # Nginx serves the Vite production build and proxies /api/* and /api/v1/ws
+  # to the backend container. The browser sees a single origin (port 3000),
+  # so no CORS preflight is ever needed.
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cbdc_frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    env_file:
+      - ./frontend/.env
+    ports:
+      - "3000:80"
+    networks:
+      - cbdc_net
 
 volumes:
   postgres_data:
